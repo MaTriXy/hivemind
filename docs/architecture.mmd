@@ -1,0 +1,72 @@
+graph TB
+    subgraph User["User Access"]
+        Browser["Browser / Mobile"]
+        Tunnel["Cloudflare Tunnel<br/>(HTTPS)"]
+    end
+
+    subgraph Dashboard["Web Dashboard"]
+        Frontend["React Frontend<br/>(Vite + TypeScript)"]
+        Auth["Device Auth<br/>(One-time code)"]
+        API["FastAPI Server<br/>(REST + WebSocket)"]
+    end
+
+    subgraph Core["Orchestration Engine"]
+        Orch["Orchestrator<br/>(Session Manager)"]
+        PM["PM Agent<br/>(Task Planner)"]
+        DAG["DAG Executor<br/>(Parallel Runner)"]
+    end
+
+    subgraph Agents["Specialist Agents"]
+        Coder["Coder Agent"]
+        Reviewer["Reviewer Agent"]
+        Architect["Architect Agent"]
+        Debug["Debug Agent"]
+        Research["Research Agent"]
+    end
+
+    subgraph Isolation["Project Isolation"]
+        Scope["File Scope<br/>Enforcement"]
+        Context["Project Context<br/>Builder"]
+        Git["Git Discipline<br/>(Auto-commit)"]
+    end
+
+    subgraph External["External"]
+        Claude["Claude Code CLI"]
+        FS["Local File System<br/>(Your Projects)"]
+    end
+
+    Browser -->|"HTTPS"| Tunnel
+    Tunnel -->|"localhost:8080"| API
+    API -->|"Auth check"| Auth
+    API -->|"REST/WS"| Frontend
+    API -->|"Commands"| Orch
+    Orch -->|"Plan request"| PM
+    PM -->|"Task DAG"| DAG
+    DAG -->|"Parallel tasks"| Coder
+    DAG -->|"Parallel tasks"| Reviewer
+    DAG -->|"Parallel tasks"| Architect
+    DAG -->|"Parallel tasks"| Debug
+    DAG -->|"Parallel tasks"| Research
+    Coder -->|"SDK calls"| Claude
+    Reviewer -->|"SDK calls"| Claude
+    Architect -->|"SDK calls"| Claude
+    Debug -->|"SDK calls"| Claude
+    Research -->|"SDK calls"| Claude
+    Claude -->|"Read/Write"| FS
+    DAG -->|"Enforce"| Scope
+    Orch -->|"Build"| Context
+    Orch -->|"Track"| Git
+
+    classDef user fill:#4F46E5,stroke:#3730A3,color:#fff
+    classDef dashboard fill:#059669,stroke:#047857,color:#fff
+    classDef core fill:#D97706,stroke:#B45309,color:#fff
+    classDef agent fill:#DC2626,stroke:#B91C1C,color:#fff
+    classDef isolation fill:#7C3AED,stroke:#6D28D9,color:#fff
+    classDef external fill:#6B7280,stroke:#4B5563,color:#fff
+
+    class Browser,Tunnel user
+    class Frontend,Auth,API dashboard
+    class Orch,PM,DAG core
+    class Coder,Reviewer,Architect,Debug,Research agent
+    class Scope,Context,Git isolation
+    class Claude,FS external

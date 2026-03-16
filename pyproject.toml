@@ -1,0 +1,132 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "hivemind"
+version = "0.1.0"
+description = "Web dashboard for Claude agent orchestration"
+requires-python = ">=3.11"
+readme = "README.md"
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "-p", "no:warnings",
+]
+
+# ---------------------------------------------------------------------------
+# ruff (lint + format)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["."]
+exclude = [
+    ".venv",
+    "venv",
+    "__pycache__",
+    "*.egg-info",
+    "frontend",
+    "data",
+    "logs",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "S",   # flake8-bandit (security)
+    "T20", # flake8-print (no stray prints in lib code)
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "S101",  # assert used (acceptable in tests / type narrowing)
+    "S603",  # subprocess calls (needed for Claude CLI)
+    "S607",  # partial paths (needed for Claude CLI)
+    "T201",  # print (allowed in server entry points)
+    "B008",  # do not perform function calls in default args (FastAPI Depends)
+    "E501",  # line-length handled by formatter
+    "E402",  # module-level import not at top (config pattern with load_dotenv)
+    "E741",  # ambiguous variable name (short names like l, O acceptable here)
+    "S105",  # hardcoded passwords (false positives on test fixtures)
+    "S108",  # insecure temp dirs (acceptable in tests)
+    "S110",  # try-except-pass (intentional in resilient agent code)
+    "S112",  # try-except-continue (intentional in loops)
+    "B904",  # raise from (not always needed)
+    "B012",  # return in finally (intentional)
+    "B017",  # assertRaises(Exception) (acceptable in tests)
+    "RUF001",  # ambiguous unicode (intentional in docs/comments)
+    "RUF002",  # ambiguous unicode in docstrings
+    "RUF003",  # ambiguous unicode in comments
+    "RUF012",  # mutable class variable (acceptable for module-level config)
+]
+per-file-ignores = { "tests/**" = ["S101", "T201", "S108"], "**/conftest.py" = ["S101"] }
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "config", "state", "contracts", "dag_executor", "device_auth",
+    "git_discipline", "isolated_query", "logging_config",
+    "dashboard", "orchestrator", "orch_agents", "orch_context",
+    "orch_experience", "orch_review", "orch_watchdog",
+    "pm_agent", "project_context", "skills_registry",
+    "sdk_client", "scheduler", "memory_agent", "server",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["venv", ".venv", "frontend", "data", "logs"]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    "venv/*",
+    ".venv/*",
+    "frontend/*",
+    "data/*",
+    "logs/*",
+    "setup.py",
+    "*/__pycache__/*",
+    "test_*.py",          # root-level stray test files
+    "*_test.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]

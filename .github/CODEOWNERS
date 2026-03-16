@@ -1,0 +1,14 @@
+# Default owners for everything in the repo
+* @cohen-liel
+
+# Frontend
+/frontend/ @cohen-liel
+/dashboard/ @cohen-liel
+
+# Core orchestration
+/orchestrator.py @cohen-liel
+/dag_executor.py @cohen-liel
+/contracts.py @cohen-liel
+
+# CI/CD
+/.github/ @cohen-liel

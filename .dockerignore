@@ -1,0 +1,63 @@
+# ── Python build artifacts ────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+
+# ── Node / Frontend build artifacts (built in Docker Stage 1) ────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# ── Environment & secrets ────────────────────────────────────────────────────
+.env
+*.env.local
+
+# ── Data & logs (persisted via volume mounts, not baked into image) ──────────
+data/
+logs/
+bot.log
+*.log
+
+# ── Git & IDE ────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Tests (not needed in production image) ────────────────────────────────────
+tests/
+test_*.py
+conftest.py
+
+# ── Documentation & project metadata ────────────────────────────────────────
+README.md
+*.md
+.hivemind/
+.claude/plans/
+reviews/
+
+# ── Dev/build tooling (not needed at runtime) ────────────────────────────────
+Makefile
+pyproject.toml
+requirements-dev.txt
+docker-compose.yml
+Dockerfile
+coverage.json
+restart.sh
+start.sh
+package.json
+alembic.ini
+state_snapshot.json
+
+# ── GitHub CI/CD ─────────────────────────────────────────────────────────────
+.github/
+
+# ── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

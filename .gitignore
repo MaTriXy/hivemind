@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.env
+venv/
+env/
+.venv/
+ENV/
+
+# Project specifics
+data/
+claude-projects/
+state_snapshot.json
+*.db
+*.sqlite
+*.sqlite3
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.tox/
+coverage.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.watchman-cookie-*
+
+# Debug output files
+out.json
+out.txt
+err.txt
+bot.log
+logs/
+
+# Runtime artifacts and session data
+.nexus/
+
+# Frontend build artifacts and dependencies
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.claude/
+.mcp.json
+
+# Hivemind agent metadata (internal project state)
+.hivemind/
+hivemind_*.log
+hivemind_*.tmp
+
+# SQLite runtime files
+hivemind_auth.db-shm
+hivemind_auth.db-wal
+*.db-shm
+*.db-wal
