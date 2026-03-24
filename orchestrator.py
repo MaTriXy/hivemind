@@ -58,6 +58,102 @@ _DELEGATE_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Triage — decide if a task is simple enough to skip PM+Architect
+# ---------------------------------------------------------------------------
+
+# Keywords that indicate a task is NOT simple (needs full planning pipeline)
+_COMPLEX_KEYWORDS = frozenset(
+    {
+        "authentication",
+        "auth system",
+        "database schema",
+        "migration",
+        "refactor",
+        "redesign",
+        "architecture",
+        "microservice",
+        "api design",
+        "full stack",
+        "fullstack",
+        "build an app",
+        "create a system",
+        "integrate",
+        "deployment",
+        "ci/cd",
+        "infrastructure",
+        "test suite",
+        "test framework",
+        "security audit",
+    }
+)
+
+
+def _triage_is_simple(user_message: str) -> bool:
+    """Decide if a user message is simple enough to bypass PM+Architect.
+
+    A task is considered SIMPLE when:
+    1. The message is short (≤ 40 words AND ≤ 150 characters)
+    2. No complex keywords are present (English or Hebrew)
+    3. It's not asking for broad/vague improvements
+
+    This is intentionally conservative — false negatives (treating a simple
+    task as complex) waste some tokens but still work.  False positives
+    (treating a complex task as simple) would produce poor results.
+    """
+    words = user_message.split()
+    if len(words) > 40:
+        return False
+
+    # Character-length guard — catches longer non-English messages where
+    # word count is low but the request is actually complex.
+    if len(user_message) > 150:
+        return False
+
+    msg_lower = user_message.lower()
+
+    # Check for complex keywords (English)
+    for kw in _COMPLEX_KEYWORDS:
+        if kw in msg_lower:
+            return False
+
+    # Check for complex indicators (Hebrew)
+    _hebrew_complex = [
+        "ארכיטקטורה",
+        "מיגרציה",
+        "אימות",
+        "אבטחה",
+        "מערכת",
+        "עיצוב",
+        "רפקטור",
+        "אינטגרציה",
+        "תשתית",
+        "פריסה",
+        "בסיס נתונים",
+        "full stack",
+        "תבין על מה",
+        "תבדוק את",
+    ]
+    if any(hk in msg_lower for hk in _hebrew_complex):
+        return False
+
+    # Vague broad requests need PM decomposition
+    vague_patterns = [
+        "make it better",
+        "improve everything",
+        "be the best",
+        "fix all",
+        "תשפר הכל",
+        "תתקן הכל",
+        "הכי טוב",
+        "ברמות הכי גבוהות",
+    ]
+    if any(vp in msg_lower for vp in vague_patterns):
+        return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Project Execution Queue — sequential per project, parallel across projects
 # ---------------------------------------------------------------------------
 
@@ -379,6 +475,13 @@ class OrchestratorManager:
         self._graph_dispatcher: asyncio.Task[None] | None = None
         # Count of graph executions currently running under the semaphore
         self._active_graph_count: int = 0
+
+        # ── Deferred inject buffer ────────────────────────────────────────
+        # Messages that arrive while is_running=True but _live_graph is not
+        # yet set (PM/Architect phase).  They are drained and injected as
+        # soon as _live_graph becomes available — never spawning a parallel
+        # DAG on the same project.
+        self._pending_inject_messages: list[str] = []
 
         # ── Project execution queue — sequential per project, parallel across ──
         self._project_queue: ProjectExecutionQueue = ProjectExecutionQueue.instance()
@@ -998,14 +1101,19 @@ class OrchestratorManager:
                 )
                 return
 
-            # Fallback: no live graph (non-DAG mode or graph not yet created).
-            # Route through the parallel ingestion queue.
+            # Graph not yet created (PM/Architect phase).  Buffer the
+            # message so it gets injected once _live_graph is set —
+            # never spawn a parallel DAG on the same project.
+            self._pending_inject_messages.append(user_message)
             logger.info(
-                f"[{self.project_id}] start_session: already running — "
-                f"queuing new task (queue depth will be "
-                f"{self._graph_ingestion_queue.qsize() + 1})"
+                f"[{self.project_id}] start_session: already running, "
+                f"graph not ready — buffered for injection "
+                f"(pending={len(self._pending_inject_messages)})"
             )
-            await self._submit_to_graph_ingestion_queue(user_message)
+            await self._send_result(
+                "📥 **Message queued** — will be added to the plan once "
+                "current planning phase completes."
+            )
             return
 
         use_dag = self.multi_agent and USE_DAG_EXECUTOR
@@ -1313,10 +1421,12 @@ class OrchestratorManager:
 
         graph = self._live_graph
         if graph is None:
+            # Buffer for later injection instead of spawning a parallel DAG
+            self._pending_inject_messages.append(user_message)
             logger.warning(
-                f"[{self.project_id}] _inject_user_tasks: no live graph — falling back to queue"
+                f"[{self.project_id}] _inject_user_tasks: no live graph — "
+                f"buffered for injection (pending={len(self._pending_inject_messages)})"
             )
-            await self._submit_to_graph_ingestion_queue(user_message)
             return
 
         await self._send_result(
@@ -1330,17 +1440,21 @@ class OrchestratorManager:
 
             # Build context about existing tasks so PM knows what's already planned
             existing_summary = []
+            completed_ids = set(self._dag_task_statuses.keys())
             for t in graph.tasks:
                 status = self._dag_task_statuses.get(t.id, "pending")
                 existing_summary.append(f"- {t.id} [{t.role.value}] ({status}): {t.goal[:80]}")
             existing_context = (
-                "\n\n## Existing DAG Tasks (DO NOT recreate these)\n"
+                "\n\n## Current DAG Tasks\n"
                 + "\n".join(existing_summary)
-                + "\n\nOnly create NEW tasks for the additional request. "
-                "Use task IDs that continue from the existing numbering "
-                f"(next available: task_{len(graph.tasks) + 1:03d}). "
-                "You may reference existing task IDs in depends_on if the new "
-                "tasks depend on work already planned."
+                + "\n\n**Instructions:**\n"
+                "- To ADD new tasks: create them with IDs continuing from "
+                f"task_{len(graph.tasks) + 1:03d}.\n"
+                "- To CANCEL a pending task: include a task with the same ID "
+                "and set its goal to exactly 'CANCEL'.\n"
+                "- Do NOT recreate tasks that already exist unchanged.\n"
+                "- Tasks with status 'completed' or 'working' cannot be cancelled.\n"
+                "- You may reference existing task IDs in depends_on."
             )
 
             # Call PM with enriched message
@@ -1365,20 +1479,34 @@ class OrchestratorManager:
             )
 
             if not new_graph or not new_graph.tasks:
-                await self._send_result("⚠️ PM Agent returned no additional tasks.")
+                await self._send_result("⚠️ PM Agent returned no changes to the DAG.")
                 return
 
-            # Filter out tasks whose IDs already exist in the live graph
             existing_ids = {t.id for t in graph.tasks}
-            new_tasks = [t for t in new_graph.tasks if t.id not in existing_ids]
+            changes: list[str] = []
 
-            if not new_tasks:
-                await self._send_result("⚠️ All planned tasks already exist in the DAG.")
-                return
+            # Process cancellations (tasks with goal == "CANCEL")
+            cancelled: list[str] = []
+            for t in new_graph.tasks:
+                if t.id in existing_ids and t.goal.strip().upper() == "CANCEL":
+                    if graph.remove_task(t.id, completed_ids):
+                        cancelled.append(t.id)
+                        logger.info(f"[{self.project_id}] CANCELLED pending task: {t.id}")
+            if cancelled:
+                changes.append(
+                    f"🗑️ Cancelled {len(cancelled)} task(s): "
+                    + ", ".join(f"`{tid}`" for tid in cancelled)
+                )
 
-            # Inject new tasks into the live graph
+            # Process additions (new task IDs)
+            # Re-read existing_ids after removals
+            existing_ids = {t.id for t in graph.tasks}
+            new_tasks = [
+                t
+                for t in new_graph.tasks
+                if t.id not in existing_ids and t.goal.strip().upper() != "CANCEL"
+            ]
             for task in new_tasks:
-                # Validate dependency references
                 valid_deps = [
                     d
                     for d in task.depends_on
@@ -1387,9 +1515,18 @@ class OrchestratorManager:
                 task.depends_on = valid_deps
                 graph.add_task(task)
                 logger.info(
-                    f"[{self.project_id}] INJECTED user task: {task.id} "
+                    f"[{self.project_id}] INJECTED task: {task.id} "
                     f"({task.role.value}) goal='{task.goal[:80]}' deps={task.depends_on}"
                 )
+            if new_tasks:
+                task_list = "\n".join(
+                    f"  - `{t.id}` [{t.role.value}]: {t.goal[:100]}" for t in new_tasks
+                )
+                changes.append(f"➕ Added {len(new_tasks)} task(s):\n{task_list}")
+
+            if not changes:
+                await self._send_result("⚠️ No changes to the DAG from new message.")
+                return
 
             # Update cached serialized graph
             self._current_dag_graph = graph.model_dump()
@@ -1400,12 +1537,9 @@ class OrchestratorManager:
                 graph=self._current_dag_graph,
             )
 
-            task_list = "\n".join(
-                f"  - `{t.id}` [{t.role.value}]: {t.goal[:100]}" for t in new_tasks
-            )
             await self._send_result(
-                f"✅ **{len(new_tasks)} new tasks injected** into running DAG:\n{task_list}\n\n"
-                f"_Tasks will be picked up in the next execution round._"
+                "✅ **DAG updated:**\n" + "\n".join(changes) + "\n\n"
+                "_Changes will take effect in the next execution round._"
             )
 
         except Exception as exc:
@@ -1415,9 +1549,9 @@ class OrchestratorManager:
             )
             await self._send_result(
                 f"⚠️ Could not inject tasks: {str(exc)[:200]}\n"
-                f"_Queuing as separate execution instead._"
+                f"_The message was lost — please resend after the current "
+                f"execution completes._"
             )
-            await self._submit_to_graph_ingestion_queue(user_message)
 
     def _ensure_graph_dispatcher(self) -> None:
         """Start the graph ingestion dispatcher if it is not already running.
@@ -1742,9 +1876,44 @@ class OrchestratorManager:
             if context_parts:
                 await self._send_result(f"📚 Loaded: {', '.join(context_parts)}")
 
+            # ── Step 0.4: Triage — skip PM+Architect for simple tasks ──
+            #
+            # Research (SEMAG 2026): applying a complex pipeline to a simple
+            # task *reduces* quality and wastes tokens.  For trivial requests
+            # (bug fixes, config changes, colour tweaks) a single fullstack
+            # agent is faster and more reliable than PM → DAG → 3+ agents.
+            _triage_skip_planning = False
+            if _cached_graph is None:
+                _is_simple = _triage_is_simple(user_message)
+                if _is_simple:
+                    logger.info(
+                        f"[{self.project_id}] Triage: SIMPLE task — "
+                        f"bypassing Architect + PM, using direct 2-task graph"
+                    )
+                    await self._send_result(
+                        "⚡ **Simple task detected** — executing directly "
+                        "without full planning pipeline"
+                    )
+                    graph = fallback_single_task_graph(user_message, self.project_id)
+                    _last_graph = graph
+                    _triage_skip_planning = True
+
+                    # Emit the graph to the frontend
+                    task_lines = []
+                    for i, t in enumerate(graph.tasks, 1):
+                        task_lines.append(f"  {i}. **{t.role.value}** — {t.goal[:80]}")
+                    await self._send_result(
+                        f"📋 **Quick plan:** {graph.vision[:100]}\n\n" + chr(10).join(task_lines)
+                    )
+                    await self._emit_event("task_graph", graph=graph.model_dump())
+
             # ── Step 0.5: Architect Agent (pre-planning review) ──
             architect_brief: ArchitectureBrief | None = None
-            if _cached_graph is None and should_run_architect(user_message, bool(memory_snapshot)):
+            if (
+                not _triage_skip_planning
+                and _cached_graph is None
+                and should_run_architect(user_message, bool(memory_snapshot))
+            ):
                 self.agent_states["orchestrator"] = {
                     "state": "working",
                     "task": "Architect reviewing codebase...",
@@ -1878,10 +2047,14 @@ class OrchestratorManager:
                     f"[{self.project_id}] Cross-project memory failed (non-fatal): {xmem_err}"
                 )
 
-            # ── Step 1: PM creates the plan (skip on retry — reuse cached graph) ──
+            # ── Step 1: PM creates the plan ──
+            #    Skip when: (a) retry with cached graph, or (b) triage bypassed planning
             import time as _pm_time
 
-            if _cached_graph is not None:
+            if _triage_skip_planning:
+                # Triage already created the graph — skip PM entirely
+                pass
+            elif _cached_graph is not None:
                 graph = _cached_graph
                 logger.info(
                     f"[{self.project_id}] DAG retry #{_retry_count}: reusing cached task graph "
@@ -2182,6 +2355,21 @@ class OrchestratorManager:
             self._dag_task_statuses = {}
             # Store live reference so _inject_user_tasks can add tasks mid-execution
             self._live_graph = graph
+
+            # ── Drain deferred inject buffer ──────────────────────────────
+            # Messages that arrived during PM/Architect phase are now
+            # injected into the live graph before execution starts.
+            if self._pending_inject_messages:
+                _deferred = self._pending_inject_messages[:]
+                self._pending_inject_messages.clear()
+                logger.info(
+                    f"[{self.project_id}] Draining {len(_deferred)} deferred "
+                    f"inject message(s) into live graph"
+                )
+                for _def_msg in _deferred:
+                    self._create_background_task(
+                        self._inject_user_tasks(_def_msg),
+                    )
 
             # Session IDs shared across tasks (agent resume)
             session_id_store: dict[str, str] = {}
@@ -2853,6 +3041,17 @@ class OrchestratorManager:
             f"🔧 **Self-healing:** Task {failed_task.id} failed ({cat_str}). "
             f"Auto-created fix task {remediation_task.id} ({remediation_task.role.value})."
         )
+
+        # Re-emit the updated graph so the frontend learns about the new
+        # remediation task.  Without this, PlanView still shows the old
+        # task count and fires the "All tasks completed" celebration while
+        # remediation is still running.
+        if self._live_graph is not None:
+            self._current_dag_graph = self._live_graph.model_dump()
+            await self._emit_event(
+                "task_graph",
+                graph=self._current_dag_graph,
+            )
 
     async def _on_dag_agent_stream(self, agent_role: str, text: str, task_id: str = ""):
         """Callback: fired when a DAG agent streams text — enables real-time UI updates.
